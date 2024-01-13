@@ -1,5 +1,6 @@
 clearml
 matplotlib
+numba
 numpy
 pylint
 scipy

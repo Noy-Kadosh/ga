@@ -1,7 +1,9 @@
 #! /home/noyk/projects/ga/venv/bin/python3
 '''Utilites'''
 
+import matplotlib.pylab as plt
 import numpy as np
+from numba import jit
 from PIL import Image
 
 
@@ -14,76 +16,86 @@ def read_image(path: str, size: tuple) -> np.array:
 
 
 def get_individual(x: np.array) -> dict:
-    return {
-        'c0': x[:2],  # 0-1
-        'c1': x[2:4],  # 2-3
-        'c2': x[4:6],  # 4-5
-        'c3': x[6:8],  # 6-7
-        'r0': x[8],
-        'r1': x[9],
-        'r2': x[10],
-        'r3': x[11],
-        'color0': x[12:15],  # 12-14
-        'color1': x[15:18],
-        'color2': x[18:21],
-        'color3': x[21:24],
-        'alpha0': x[24],
-        'alpha1': x[25],
-        'alpha2': x[26],
-        'alpha3': x[27],
-    }
+    '''
+    Deprecated!
+    c - center (x, y) (2,)
+    r - radius (r) (1,)
+    color - r, g, b (3,)
+    alpha - (1,)
+    return: [dict.from_keys({'c', 'r', 'color', 'alpha'})]
+    '''
+    patches = []
+    for patch in x.reshape(-1, 7):
+        patches.append(
+            {
+                'c': patch[:2],
+                'r': patch[2],
+                'color': patch[3:6],
+                'alpha': patch[6],
+            }
+        )
+    return patches
 
 
+@jit(cache=True, nopython=True)
+def meshgrid(x, y):
+    xx = np.empty(shape=(x.size, y.size), dtype=x.dtype)
+    yy = np.empty(shape=(x.size, y.size), dtype=y.dtype)
+    for j in range(y.size):
+        for i in range(x.size):
+            xx[i, j] = i
+            yy[i, j] = j
+    return xx, yy
+
+
+@jit(cache=True, nopython=True)
 def create_circle(center, radius, color, alpha, canvas):
     alpha /= 255
     canvas_shape = canvas.shape
-    x, y = np.meshgrid(np.arange(canvas_shape[1]), np.arange(canvas_shape[0]))
+    x, y = meshgrid(np.arange(canvas_shape[1]), np.arange(canvas_shape[0]))
     circle_mask = ((x - center[0]) ** 2 + (y - center[1]) ** 2) <= radius ** 2
-    canvas[circle_mask] = alpha * canvas[circle_mask] + \
-        (1 - alpha) * np.clip(color, 0, 255)
+
+    # color = np.array(color)
+    for i in range(circle_mask.shape[0]):
+        for j in range(circle_mask.shape[1]):
+            if circle_mask[i, j] is False:
+                continue
+            canvas[i, j] = alpha * canvas[i, j] + \
+                (1 - alpha) * np.clip(color, 0, 255)
 
     return canvas
 
 
+@jit(nopython=True)
 def draw_individual(individual, canvas):
-    for i in range(len(individual) // 4):
-        center = individual[f'c{i}']
-        radius = individual[f'r{i}']
-        color = individual[f'color{i}']
-        alpha = individual[f'alpha{i}']
-        canvas = create_circle(center, radius, color, alpha, canvas)
+    for (x, y, r, R, G, B, a) in individual.reshape(-1, 7):
+        canvas = create_circle(center=(x, y), radius=r,
+                               color=np.array([R, G, B]), alpha=a, canvas=canvas)
     return canvas
 
 
-def score(individual: dict, target: np.array) -> float:
+@jit(nopython=True)
+def score_batch(individuals, target):
+    n = len(individuals)
+    scores = np.empty(n)
+    for i in range(n):
+        scores[i] = min_func(individuals[i], target)
 
+    return scores
+
+
+@jit(nopython=True)
+def min_func(x: np.array, target: np.array):
     canvas = np.zeros_like(target) + 255
-    canvas = draw_individual(individual, canvas)
-
-    if canvas.shape != target.shape:
-        raise ValueError('shape do not match!')
-
-    return np.abs(canvas - target).sum()
-
-
-def min_func(x: np.array, target: np.array) -> float:
-    canvas = np.zeros_like(target) + 255
-    canvas = draw_individual(get_individual(x), canvas)
-
-    if canvas.shape != target.shape:
-        raise ValueError('shape do not match!')
+    canvas = draw_individual(x, canvas)
 
     return np.abs(canvas - target).sum()
 
 
 def random_individual(canvas) -> dict:
-    x = np.concatenate((
-        np.random.randint(0, 499, size=(4 * 3)),
-        np.random.randint(0, 256, size=(4 * 4)),
-    ))
-
-    individual = get_individual(x)
-    draw_individual(individual, canvas)
+    i = 20  # num of patches
+    x = np.random.randint(0, 256, size=7 * i)
+    draw_individual(x, canvas)
 
 
 def save_solution_as_image(sol_canvas: np.array, gen_num: int, title: str) -> None:
@@ -105,10 +117,41 @@ def test():
     stats = np.empty(n)
 
     for i in range(n):
+        canvas = CANVAS.copy()
         tic = time()
-        random_individual(CANVAS)
+        random_individual(canvas)
         stats[i] = time() - tic
 
     M = stats.mean()
     STD = stats.std()
     print(f'{n} loops: mean {M:.3} std {STD:.3} total {stats.sum():.3f}')
+
+    save_solution_as_image(canvas, gen_num=-1, title='test')
+
+
+def test_batch():
+
+    from time import time
+
+    SIZE = (500, 500)
+    TARGET = read_image(path="color_box.png", size=SIZE)
+    CANVAS = np.zeros_like(TARGET) + 255
+    n = 10
+    stats = np.empty(n)
+
+    for i in range(n):
+        tic = time()
+        x = np.random.randint(0, 256, size=(4, 7 * 20))
+        score_batch(x, TARGET)
+        stats[i] = time() - tic
+
+    M = stats.mean()
+    STD = stats.std()
+    print(f'{n} loops: mean {M:.3} std {STD:.3} total {stats.sum():.3f}')
+
+    canvas = draw_individual(x[0], CANVAS)
+    save_solution_as_image(canvas, gen_num=-1, title='test')
+
+
+if __name__ == "__main__":
+    test_batch()
