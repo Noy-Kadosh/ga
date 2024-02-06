@@ -1,7 +1,9 @@
 #! /home/noyk/projects/ga/venv/bin/python3
 '''Utilites'''
 
+import matplotlib.pylab as plt
 import numpy as np
+import torch
 from PIL import Image
 
 
@@ -35,12 +37,20 @@ def get_individual(x: np.array) -> dict:
 
 
 def create_circle(center, radius, color, alpha, canvas):
-    alpha /= 255
     canvas_shape = canvas.shape
-    x, y = np.meshgrid(np.arange(canvas_shape[1]), np.arange(canvas_shape[0]))
-    circle_mask = ((x - center[0]) ** 2 + (y - center[1]) ** 2) <= radius ** 2
-    canvas[circle_mask] = alpha * canvas[circle_mask] + \
-        (1 - alpha) * np.clip(color, 0, 255)
+
+    if len(set(canvas_shape)) == 1:
+        x = torch.arange(canvas_shape[0], device=canvas.device)
+        xx, yy = torch.meshgrid(x, x, indexing='ij')
+    else:
+        x = torch.arange(canvas_shape[0], device=canvas.device)
+        y = torch.arange(canvas_shape[1], device=canvas.device)
+        xx, yy = torch.meshgrid(x, y, indexing='ij')
+
+    circle_mask = ((xx - center[0]) ** 2 +
+                   (yy - center[1]) ** 2) <= radius ** 2
+    canvas[circle_mask] = (alpha / 255) * canvas[circle_mask] + \
+        (1 - (alpha / 255)) * torch.clip(color, 0, 255)
 
     return canvas
 
